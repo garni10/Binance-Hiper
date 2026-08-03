@@ -340,23 +340,49 @@ with tab1:
     st.plotly_chart(fig, use_container_width=True)
     
     # ======================================
-    # HISTOGRAMAS (ÚLTIMO SNAPSHOT)
+    # HISTOGRAMAS (ÚLTIMO SNAPSHOT - ESCALAS INDEPENDIENTES)
     # ======================================
     col_sell, col_buy = st.columns(2)
-    xmin = min(buy["Precio"].min(), sell["Precio"].min()) if not buy.empty and not sell.empty else 0
-    xmax = max(buy["Precio"].max(), sell["Precio"].max()) if not buy.empty and not sell.empty else 10
     bin_size = 0.50
     
     with col_sell:
-        fig = px.histogram(sell, x="Precio", title="Distribución SELL", nbins=int((xmax - xmin) / bin_size) if xmax > xmin else 10)
-        fig.update_traces(xbins=dict(start=xmin, end=xmax, size=bin_size))
-        st.plotly_chart(fig, use_container_width=True)
+        if not sell.empty:
+            xmin_s, xmax_s = sell["Precio"].min(), sell["Precio"].max()
+            nbins_s = max(int((xmax_s - xmin_s) / bin_size), 5) if xmax_s > xmin_s else 10
+            
+            fig_sell = px.histogram(
+                sell, 
+                x="Precio", 
+                title="Distribución SELL",
+                labels={"Precio": "Precio (BOB)", "count": "Cantidad de vendedores"},
+                nbins=nbins_s
+            )
+            fig_sell.update_traces(xbins=dict(start=xmin_s, end=xmax_s, size=bin_size))
+            fig_sell.update_layout(
+                yaxis_title="Cantidad de vendedores",
+                xaxis_title="Precio (BOB)"
+            )
+            st.plotly_chart(fig_sell, use_container_width=True)
     
     with col_buy:
-        fig = px.histogram(buy, x="Precio", title="Distribución BUY", nbins=int((xmax - xmin) / bin_size) if xmax > xmin else 10)
-        fig.update_traces(xbins=dict(start=xmin, end=xmax, size=bin_size))
-        st.plotly_chart(fig, use_container_width=True)
-    
+        if not buy.empty:
+            xmin_b, xmax_b = buy["Precio"].min(), buy["Precio"].max()
+            nbins_b = max(int((xmax_b - xmin_b) / bin_size), 5) if xmax_b > xmin_b else 10
+            
+            fig_buy = px.histogram(
+                buy, 
+                x="Precio", 
+                title="Distribución BUY",
+                labels={"Precio": "Precio (BOB)", "count": "Cantidad de vendedores"},
+                nbins=nbins_b
+            )
+            fig_buy.update_traces(xbins=dict(start=xmin_b, end=xmax_b, size=bin_size))
+            fig_buy.update_layout(
+                yaxis_title="Cantidad de vendedores",
+                xaxis_title="Precio (BOB)"
+            )
+            st.plotly_chart(fig_buy, use_container_width=True)  
+            
     # ======================================
     # TOP 10 VENDEDORES (ÚLTIMO SNAPSHOT)
     # ======================================
@@ -475,25 +501,101 @@ with tab2:
     if categoria != "Todas":
         df_h = df_h[df_h["Categoría"] == categoria]
 
+    # ====================================================
+    # HIPERMAXI: CÁLCULOS Y KPIs
+    # ====================================================
+    
+    # Se asegura el orden de fechas
     df_h = df_h.sort_values(["Sucursal", "Producto", "Fecha"])
     df_h["Variacion_Abs"] = df_h.groupby(["Sucursal", "Producto"])["Precio"].diff()
 
-    ultima_fecha = df_h["Fecha"].max()
-    df_ult = df_h[df_h["Fecha"] == ultima_fecha].copy()
+    fechas_disponibles = sorted(df_h["Fecha"].dt.date.unique())
+    
+    if len(fechas_disponibles) > 0:
+        ultima_fecha = fechas_disponibles[-1]
+        
+        # ----------------------------------------------------
+        # 1. CÁLCULO DE VARIACIONES TEMPORALES (FILA SUPERIOR)
+        # ----------------------------------------------------
+        # Precio promedio general de la última fecha
+        p_actual = df_h[df_h["Fecha"].dt.date == ultima_fecha]["Precio"].mean()
+        
+        # A) Variación 7 capturas atrás
+        idx_7 = max(0, len(fechas_disponibles) - 8)
+        fecha_7 = fechas_disponibles[idx_7]
+        p_7d = df_h[df_h["Fecha"].dt.date == fecha_7]["Precio"].mean()
+        var_7d = ((p_actual - p_7d) / p_7d * 100) if p_7d > 0 else 0.0
 
-    variacion_total = df_ult["Variacion_Abs"].fillna(0).sum()
-    variacion_promedio = df_ult["Variación diaria precio"].mean() * 100 if "Variación diaria precio" in df_ult.columns else 0
-    productos_suben = (df_ult["Variacion_Abs"] > 0).sum()
-    productos_total = df_ult["Producto"].nunique()
-    pct_suben = (productos_suben / productos_total * 100) if productos_total > 0 else 0
+        # B) Variación respecto al último dato del mes pasado
+        primer_dia_mes_actual = ultima_fecha.replace(day=1)
+        fechas_mes_pasado = [f for f in fechas_disponibles if f < primer_dia_mes_actual]
+        
+        if fechas_mes_pasado:
+            fecha_mes_pasado = fechas_mes_pasado[-1]
+            p_mes_pasado = df_h[df_h["Fecha"].dt.date == fecha_mes_pasado]["Precio"].mean()
+            var_mes_pasado = ((p_actual - p_mes_pasado) / p_mes_pasado * 100) if p_mes_pasado > 0 else 0.0
+            label_mes_pasado = f"vs Mes Anterior ({fecha_mes_pasado.strftime('%d/%m')})"
+        else:
+            var_mes_pasado = 0.0
+            label_mes_pasado = "vs Mes Anterior (Sin datos)"
 
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Variación Total Precio", f"Bs {variacion_total:,.2f}")
-    col2.metric("Variación Promedio %", f"{variacion_promedio:.2f}%")
-    col3.metric("% Productos que Suben", f"{pct_suben:.2f}%")
-    col4.metric("Última Actualización", ultima_fecha.strftime("%d/%m/%Y") if pd.notnull(ultima_fecha) else "-")
+        # C) Variación respecto al primer dato de la serie
+        fecha_inicio = fechas_disponibles[0]
+        p_inicio = df_h[df_h["Fecha"].dt.date == fecha_inicio]["Precio"].mean()
+        var_inicio = ((p_actual - p_inicio) / p_inicio * 100) if p_inicio > 0 else 0.0
 
-    st.markdown("---")
+        # ----------------------------------------------------
+        # DESPLIEGUE FILA 1: VARIACIONES TEMPORALES
+        # ----------------------------------------------------
+        st.subheader("📈 Variaciones Temporales Promedio")
+        c1, c2, c3, c4 = st.columns(4)
+        
+        c1.metric(
+            label="Precio Promedio Actual", 
+            value=f"Bs {p_actual:,.2f}",
+            delta=f"Última fecha: {ultima_fecha.strftime('%d/%m/%Y')}",
+            delta_color="off"
+        )
+        c2.metric(
+            label="Var. 7 Capturas Atrás", 
+            value=f"{var_7d:+.2f}%",
+            delta=f"Base: {fecha_7.strftime('%d/%m')}"
+        )
+        c3.metric(
+            label=label_mes_pasado, 
+            value=f"{var_mes_pasado:+.2f}%",
+            delta="Cierre mes anterior"
+        )
+        c4.metric(
+            label=f"Var. vs Inicio ({fecha_inicio.strftime('%d/%m/%Y')})", 
+            value=f"{var_inicio:+.2f}%",
+            delta="Serie completa"
+        )
+
+        st.markdown("---")
+
+        # ----------------------------------------------------
+        # 2. CÁLCULO DE METRICAS GENERALES (FILA INFERIOR)
+        # ----------------------------------------------------
+        df_ult = df_h[df_h["Fecha"].dt.date == ultima_fecha].copy()
+
+        variacion_total = df_ult["Variacion_Abs"].fillna(0).sum()
+        variacion_promedio = df_ult["Variación diaria precio"].mean() * 100 if "Variación diaria precio" in df_ult.columns else 0
+        productos_suben = (df_ult["Variacion_Abs"] > 0).sum()
+        productos_total = df_ult["Producto"].nunique()
+        pct_suben = (productos_suben / productos_total * 100) if productos_total > 0 else 0
+
+        # ----------------------------------------------------
+        # DESPLIEGUE FILA 2: METRICAS GENERALES DEL DÍA
+        # ----------------------------------------------------
+        st.subheader("🛒 Métricas de la Última Actualización")
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Variación Total Precio", f"Bs {variacion_total:,.2f}")
+        col2.metric("Variación Promedio %", f"{variacion_promedio:.2f}%")
+        col3.metric("% Productos que Suben", f"{pct_suben:.2f}%")
+        col4.metric("Última Actualización", ultima_fecha.strftime("%d/%m/%Y"))
+
+        st.markdown("---")
 
     precios = df_h.groupby("Fecha")["Precio"].mean().reset_index()
     fig = px.line(precios, x="Fecha", y="Precio", markers=True, title="Precio Promedio")

@@ -454,6 +454,167 @@ with tab1:
         )
         st.plotly_chart(fig, use_container_width=True)
 
+    import plotly.express as px
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+    import matplotlib.colors as mcolors
+    import matplotlib.pyplot as plt
+    
+    # ====================================================
+    # ANÁLISIS DE CORRELACIÓN Y LIQUIDEZ BUY VS PRECIO
+    # ====================================================
+    st.markdown("---")
+    st.subheader("📊 Análisis de Liquidez (Disponibilidad BUY) vs. Precio Robusto BUY")
+    
+    # 1. Preparación y alineación de series temporales
+    df_buy = df_b[df_b["Tipo"] == "BUY"].copy()
+    
+    # Disponibilidad total BUY por Snapshot
+    disp_buy = (
+        df_buy.groupby("Timestamp")["Disponible"]
+        .sum()
+        .rename("Disponibilidad_BUY")
+    )
+    
+    # Precio Robusto BUY por Snapshot
+    p_robusto_buy = (
+        precio_robusto[precio_robusto["Tipo"] == "BUY"]
+        .set_index("Snapshot")["Precio"]
+        .rename("Precio_Robusto_BUY")
+    )
+    
+    # Consolidación de dataset alineado
+    df_corr = pd.concat([disp_buy, p_robusto_buy], axis=1).dropna().sort_index()
+    
+    if len(df_corr) > 12:
+        # Coeficiente contemporáneo
+        r_corr = df_corr["Disponibilidad_BUY"].corr(df_corr["Precio_Robusto_BUY"])
+        
+        # ----------------------------------------------------
+        # 1. GRÁFICO EVOLUTIVO DUAL (FULL WIDTH)
+        # ----------------------------------------------------
+        fig_dual = make_subplots(specs=[[{"secondary_y": True}]])
+        
+        # Serie 1: Disponibilidad BUY (Eje Izquierdo - Celeste Tipo)
+        fig_dual.add_trace(
+            go.Scatter(
+                x=df_corr.index,
+                y=df_corr["Disponibilidad_BUY"],
+                name="Disponibilidad BUY (USDT)",
+                mode="lines+markers",
+                line=dict(color="#29B6F6", width=2),
+                marker=dict(size=4)
+            ),
+            secondary_y=False,
+        )
+        
+        # Serie 2: Precio Robusto BUY (Eje Derecho - Verde Azulado Contraste)
+        fig_dual.add_trace(
+            go.Scatter(
+                x=df_corr.index,
+                y=df_corr["Precio_Robusto_BUY"],
+                name="Precio Robusto BUY (BOB)",
+                mode="lines+markers",
+                line=dict(color="#00E676", width=2.5),
+                marker=dict(size=4)
+            ),
+            secondary_y=True,
+        )
+        
+        # Cálculo de margen dinámico en eje X para visibilidad en extremos
+        dt_min = df_corr.index.min()
+        dt_max = df_corr.index.max()
+        delta_padding = (dt_max - dt_min) * 0.03  # 3% de padding
+        
+        fig_dual.update_layout(
+            title=f"Evolución Temporal de Liquidez vs. Precio Robusto BUY | Correlación contemporánea r: <b>{r_corr:.3f}</b>",
+            hovermode="x unified",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            margin=dict(l=20, r=20, t=60, b=20)
+        )
+        
+        fig_dual.update_xaxes(
+            title_text="Timestamp",
+            tickformat="%d-%b %H:%M",
+            range=[dt_min - delta_padding, dt_max + delta_padding]
+        )
+        fig_dual.update_yaxes(title_text="Disponibilidad BUY (USDT)", secondary_y=False)
+        fig_dual.update_yaxes(title_text="Precio Robusto BUY (BOB)", secondary_y=True)
+        
+        st.plotly_chart(fig_dual, use_container_width=True)
+        
+        st.markdown("---")
+        
+        # ----------------------------------------------------
+        # 2. GRÁFICO DE CORRELACIONES CRUZADAS (PLOTLY FULL WIDTH)
+        # ----------------------------------------------------
+        max_lag = 12
+        lags = list(range(-max_lag, max_lag + 1))
+        cross_corrs = []
+        
+        s_disp = df_corr["Disponibilidad_BUY"]
+        s_prec = df_corr["Precio_Robusto_BUY"]
+        
+        for lag in lags:
+            if lag < 0:
+                corr = s_disp.corr(s_prec.shift(-lag))
+            elif lag > 0:
+                corr = s_disp.shift(lag).corr(s_prec)
+            else:
+                corr = s_disp.corr(s_prec)
+            cross_corrs.append(corr)
+            
+        df_cc = pd.DataFrame({
+            "Rezago": lags,
+            "Correlacion": cross_corrs
+        })
+        
+        # Mapeo de colores usando la paleta coolwarm de Matplotlib
+        cmap = plt.get_cmap("coolwarm")
+        hex_colors = []
+        for c in cross_corrs:
+            if pd.isna(c):
+                hex_colors.append("#808080")
+            else:
+                # Normalizar de [-1, 1] a [0, 1] para la paleta
+                norm_val = (c + 1) / 2.0
+                hex_colors.append(mcolors.to_hex(cmap(norm_val)))
+                
+        df_cc["Color"] = hex_colors
+        df_cc["Texto_Barra"] = df_cc["Correlacion"].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "")
+        df_cc["Hover_Val"] = df_cc["Correlacion"].apply(lambda x: f"{x:.4f}" if pd.notna(x) else "N/A")
+        
+        fig_cc = px.bar(
+            df_cc,
+            x="Rezago",
+            y="Correlacion",
+            text="Texto_Barra",
+            custom_data=["Hover_Val"],
+            title="Correlaciones Cruzadas: Liquidez (BUY) vs. Precio Robusto (BUY) (Rezagos -12 a +12)"
+        )
+        
+        fig_cc.update_traces(
+            marker_color=df_cc["Color"],
+            textposition="outside",
+            hovertemplate="<b>Rezago: %{x}</b><br>Correlación: <b>%{customdata[0]}</b><extra></extra>"
+        )
+        
+        fig_cc.update_layout(
+            yaxis_title="Coeficiente de Correlación",
+            xaxis_title="Rezago (Snapshots)",
+            yaxis=dict(range=[-1.15, 1.15]),
+            xaxis=dict(dtick=1),
+            hovermode="x"
+        )
+        
+        fig_cc.add_hline(y=0, line_dash="dash", line_color="gray", line_width=1)
+        fig_cc.add_vline(x=0, line_dash="solid", line_color="white", line_width=1)
+        
+        st.plotly_chart(fig_cc, use_container_width=True)
+    
+    else:
+        st.warning("No hay suficientes snapshots cargados para realizar el análisis de correlaciones cruzadas (mínimo 12 datos).")
+    
     # ====================================================
     # CUADRO COMPONENTES (MANTENIDO COMENTADO)
     # ====================================================    

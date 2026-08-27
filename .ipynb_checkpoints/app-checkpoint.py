@@ -457,8 +457,6 @@ with tab1:
     import plotly.express as px
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
-    import matplotlib.colors as mcolors
-    import matplotlib.pyplot as plt
     
     # ====================================================
     # ANÁLISIS DE CORRELACIÓN Y LIQUIDEZ BUY VS PRECIO
@@ -546,7 +544,7 @@ with tab1:
         st.markdown("---")
         
         # ----------------------------------------------------
-        # 2. GRÁFICO DE CORRELACIONES CRUZADAS (PLOTLY FULL WIDTH)
+        # 2. GRÁFICO DE CORRELACIONES CRUZADAS (100% PLOTLY)
         # ----------------------------------------------------
         max_lag = 12
         lags = list(range(-max_lag, max_lag + 1))
@@ -563,24 +561,12 @@ with tab1:
             else:
                 corr = s_disp.corr(s_prec)
             cross_corrs.append(corr)
-            
+        
         df_cc = pd.DataFrame({
             "Rezago": lags,
             "Correlacion": cross_corrs
         })
         
-        # Mapeo de colores usando la paleta coolwarm de Matplotlib
-        cmap = plt.get_cmap("coolwarm")
-        hex_colors = []
-        for c in cross_corrs:
-            if pd.isna(c):
-                hex_colors.append("#808080")
-            else:
-                # Normalizar de [-1, 1] a [0, 1] para la paleta
-                norm_val = (c + 1) / 2.0
-                hex_colors.append(mcolors.to_hex(cmap(norm_val)))
-                
-        df_cc["Color"] = hex_colors
         df_cc["Texto_Barra"] = df_cc["Correlacion"].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "")
         df_cc["Hover_Val"] = df_cc["Correlacion"].apply(lambda x: f"{x:.4f}" if pd.notna(x) else "N/A")
         
@@ -588,13 +574,15 @@ with tab1:
             df_cc,
             x="Rezago",
             y="Correlacion",
+            color="Correlacion",
+            color_continuous_scale="RdBu_r",  # Equivalente nativo de Plotly a coolwarm (-1 Rojo, +1 Azul)
+            range_color=[-1, 1],
             text="Texto_Barra",
             custom_data=["Hover_Val"],
             title="Correlaciones Cruzadas: Liquidez (BUY) vs. Precio Robusto (BUY) (Rezagos -12 a +12)"
         )
         
         fig_cc.update_traces(
-            marker_color=df_cc["Color"],
             textposition="outside",
             hovertemplate="<b>Rezago: %{x}</b><br>Correlación: <b>%{customdata[0]}</b><extra></extra>"
         )
@@ -604,7 +592,8 @@ with tab1:
             xaxis_title="Rezago (Snapshots)",
             yaxis=dict(range=[-1.15, 1.15]),
             xaxis=dict(dtick=1),
-            hovermode="x"
+            hovermode="x",
+            coloraxis_showscale=False  # Oculta la barra de escala lateral
         )
         
         fig_cc.add_hline(y=0, line_dash="dash", line_color="gray", line_width=1)

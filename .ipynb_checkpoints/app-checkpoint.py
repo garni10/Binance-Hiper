@@ -785,7 +785,7 @@ for vendor in top_10_vendedores:
         # Debe haber suficientes datos para la prueba
         if len(data_test) > (max_lags * 5):
             try:
-                gc_res = grangercausalitytests(data_test, maxlag=max_lags, verbose=False)
+                gc_res = grangercausalitytests(data_test, maxlag=max_lags)
                 
                 # Buscar el lag con el mejor p-valor para este vendedor
                 best_lag = None

@@ -3,5 +3,5 @@ pandas
 numpy
 plotly
 openpyxl
-statsmodels
+statsmodels>=0.14.0
 scipy

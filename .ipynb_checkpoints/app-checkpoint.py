@@ -722,42 +722,34 @@ st.plotly_chart(fig_leaders, use_container_width=True)
 # DIAGNÓSTICO DE CONSISTENCIA LOCAL vs CLOUD
 # ====================================================
 
-st.markdown("#### 🔍 Diagnóstico del Modelo")
-
-col_diag1, col_diag2, col_diag3 = st.columns(3)
-
-with col_diag1:
-    st.metric(
-        "Observaciones df_top10_prices",
-        len(df_top10_prices)
-    )
-
-with col_diag2:
-    st.metric(
-        "Observaciones df_corr",
-        len(df_corr)
-    )
-
-with col_diag3:
-    st.metric(
-        "Vendedores Top 10",
-        len(top_10_vendedores)
-    )
-
-st.write("**Top 10 vendedores utilizados:**")
-st.write(top_10_vendedores)
-
-st.write("**Columnas de df_top10_prices:**")
-st.write(list(df_top10_prices.columns))
-
-st.write("**Rango temporal df_top10_prices:**")
-
-if not df_top10_prices.empty:
-    st.write(
-        df_top10_prices.index.min(),
-        "→",
-        df_top10_prices.index.max()
-    )
+#st.markdown("#### 🔍 Diagnóstico del Modelo")
+#col_diag1, col_diag2, col_diag3 = st.columns(3)
+#with col_diag1:
+    #st.metric(
+        #"Observaciones df_top10_prices",
+        #len(df_top10_prices)
+    #)
+#with col_diag2:
+    #st.metric(
+        #"Observaciones df_corr",
+        #len(df_corr)
+    #)
+#with col_diag3:
+    #st.metric(
+        #"Vendedores Top 10",
+        #len(top_10_vendedores)
+    #)
+#st.write("**Top 10 vendedores utilizados:**")
+#st.write(top_10_vendedores)
+#st.write("**Columnas de df_top10_prices:**")
+#st.write(list(df_top10_prices.columns))
+#st.write("**Rango temporal df_top10_prices:**")
+#if not df_top10_prices.empty:
+    #st.write(
+        #df_top10_prices.index.min(),
+        #"→",
+        #df_top10_prices.index.max()
+    #)
 
 import statsmodels.api as sm
 from statsmodels.tsa.stattools import grangercausalitytests

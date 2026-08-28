@@ -721,90 +721,86 @@ import statsmodels.api as sm
 from statsmodels.tsa.stattools import grangercausalitytests
 
 # ====================================================
-# MODELO DE STACKELBERG Y CAUSALIDAD DE GRANGER (ROBUSTO)
+# MODELO DE STACKELBERG Y CAUSALIDAD DE GRANGER
 # ====================================================
 
 st.markdown("### 🏆 Identificación del Líder de Mercado (Modelo de Stackelberg)")
 
-# 1. Asegurar limpieza total de datos sin NaNs para la prueba
-df_granger = df_top10_prices.copy().ffill().bfill()
-df_granger["Precio_Robusto"] = df_corr["Precio_Robusto_BUY"].ffill().bfill()
+# 1. Preparar la serie en diferencias para asegurar estacionariedad
+df_granger = df_top10_prices.copy()
+df_granger["Precio_Robusto"] = df_corr["Precio_Robusto_BUY"]
 df_granger_diff = df_granger.diff().dropna()
 
-max_lags = 4
+max_lags = 4  # Probar hasta 4 snapshots de rezago
 leader_results = []
 
+# Evaluamos cada vendedor del Top 10
 for vendor in top_10_vendedores:
     if vendor in df_granger_diff.columns:
-        # Formatear la matriz con nombres limpios
-        data_test = df_granger_diff[["Precio_Robusto", vendor]].copy()
-        data_test.columns = ["Y_Mercado", "X_Vendedor"]
-        data_test = data_test.dropna()
+        # Filtrar datos sin nulos
+        data_test = df_granger_diff[["Precio_Robusto", vendor]].dropna()
         
-        # Evaluar solo si la serie del vendedor presenta variabilidad
-        if len(data_test) > (max_lags * 5) and data_test["X_Vendedor"].std() > 0:
+        # Debe haber suficientes datos para la prueba
+        if len(data_test) > (max_lags * 5):
             try:
-                gc_res = grangercausalitytests(data_test[["Y_Mercado", "X_Vendedor"]], maxlag=max_lags, verbose=False)
+                gc_res = grangercausalitytests(data_test, maxlag=max_lags, verbose=False)
                 
+                # Buscar el lag con el mejor p-valor para este vendedor
                 best_lag = None
                 best_p_value = 1.0
                 
                 for lag in range(1, max_lags + 1):
-                    # Compatibilidad para extraer el p-value del test F entre versiones de statsmodels
-                    stats_dict = gc_res[lag][0]
-                    p_val = stats_dict["ssr_ftest"][1]
-                    
+                    p_val = gc_res[lag][0]["ssr_ftest"][1]
                     if p_val < best_p_value:
                         best_p_value = p_val
                         best_lag = lag
                 
-                if best_lag is not None:
-                    leader_results.append({
-                        "Vendedor": vendor,
-                        "Mejor_Lag": best_lag,
-                        "P_Valor": float(best_p_value),
-                        "Es_Lider": bool(best_p_value < 0.05)
-                    })
+                leader_results.append({
+                    "Vendedor": vendor,
+                    "Mejor_Lag": best_lag,
+                    "P_Valor": best_p_value,
+                    "Es_Lider": best_p_value < 0.05
+                })
             except Exception:
                 continue
 
-# 2. Renderizado de Métricas en Streamlit Cloud y Local
-if len(leader_results) > 0:
-    df_leaders_rank = pd.DataFrame(leader_results).sort_values(by="P_Valor")
+# Convertir a DataFrame y ordenar por significancia estadística
+df_leaders_rank = pd.DataFrame(leader_results).sort_values(by="P_Valor")
+
+if not df_leaders_rank.empty and df_leaders_rank.iloc[0]["Es_Lider"]:
+    lider_detectado = df_leaders_rank.iloc[0]["Vendedor"]
+    lag_optimo = int(df_leaders_rank.iloc[0]["Mejor_Lag"])
+    p_val_opt = df_leaders_rank.iloc[0]["P_Valor"]
     
-    if not df_leaders_rank.empty and df_leaders_rank.iloc[0]["Es_Lider"]:
-        lider_detectado = df_leaders_rank.iloc[0]["Vendedor"]
-        lag_optimo = int(df_leaders_rank.iloc[0]["Mejor_Lag"])
-        
-        # Regresión de Stackelberg con el rezago identificado
-        df_stack = pd.DataFrame({
-            "Y_Mercado": df_corr["Precio_Robusto_BUY"],
-            "X_Lider_Lag": df_top10_prices[lider_detectado].ffill().shift(lag_optimo)
-        }).dropna()
-        
-        X_reg = sm.add_constant(df_stack["X_Lider_Lag"])
-        y_reg = df_stack["Y_Mercado"]
-        model_stack = sm.OLS(y_reg, X_reg).fit()
-        
-        beta_lider = model_stack.params["X_Lider_Lag"]
-        r2_stack = model_stack.rsquared
-        
-        st.success(f"**Líder de Precios Identificado:** `{lider_detectado}`")
-        
-        col_a, col_b, col_c = st.columns(3)
-        with col_a:
-            st.metric("Tiempo de Reacción", f"{lag_optimo} Snapshot(s)", 
-                      help="Número de snapshots que le toma al mercado seguir al líder.")
-        with col_b:
-            st.metric("Sensibilidad / Coeficiente (β)", f"{beta_lider:.3f}", 
-                      help="Por cada 1 BOB que ajusta el líder, el mercado reacciona cambiando β BOB.")
-        with col_c:
-            st.metric("Capacidad Predictiva (R²)", f"{r2_stack * 100:.1f}%", 
-                      help="Porcentaje de la varianza del precio de mercado explicada por el líder.")
-    else:
-        st.info("No se encontró un líder único con significancia estadística (p < 0.05).")
+    # 2. Estimación de la Función de Reacción de Stackelberg con el Lag Óptimo
+    df_stack = pd.DataFrame({
+        "Y_Mercado": df_corr["Precio_Robusto_BUY"],
+        "X_Lider_Lag": df_top10_prices[lider_detectado].shift(lag_optimo)
+    }).dropna()
+    
+    X_reg = sm.add_constant(df_stack["X_Lider_Lag"])
+    y_reg = df_stack["Y_Mercado"]
+    model_stack = sm.OLS(y_reg, X_reg).fit()
+    
+    beta_lider = model_stack.params["X_Lider_Lag"]
+    r2_stack = model_stack.rsquared
+    
+    # Muestra de Resultados en Streamlit
+    st.success(f"**Líder de Precios Identificado:** `{lider_detectado}`")
+    
+    col_a, col_b, col_c = st.columns(3)
+    with col_a:
+        st.metric("Tiempo de Reacción", f"{lag_optimo} Snapshot(s)", 
+                  help="Número de snapshots que le toma al mercado seguir al líder.")
+    with col_b:
+        st.metric("Sensibilidad / Coeficiente (β)", f"{beta_lider:.3f}", 
+                  help="Por cada 1 BOB que ajusta el líder, el mercado reacciona cambiando β BOB.")
+    with col_c:
+        st.metric("Capacidad Predictiva (R²)", f"{r2_stack * 100:.1f}%", 
+                  help="Porcentaje de variación del mercado explicada por la conducta del líder.")
+
 else:
-    st.warning("No hay suficientes variaciones continuas para calcular la causalidad de Granger en el rango actual.")
+    st.info("No se encontró un único líder estadísticamente significativo (p < 0.05). El mercado responde a una dinámica de Bertrand atomizada/competitiva sin liderazgo persistente.")
 
 # ========================================================================================================
 # HIPERMAXI

@@ -613,6 +613,195 @@ with tab1:
     #     use_container_width=True
     # )
 
+# ====================================================
+# EXPORTACIÓN DE DATOS A EXCEL (CARPETA RAÍZ)
+# ====================================================
+
+# 1. Crear copia y dar formato de texto a la fecha/hora en el índice
+#df_export = df_corr.copy()
+#df_export.index = pd.to_datetime(df_export.index).strftime("%Y-%m-%d %H:%M:%S")
+
+# 2. Resetear índice y renombrar columnas con títulos limpios
+#df_export = df_export.reset_index().rename(columns={
+    #df_export.index.name or "index": "Timestamp / Snapshot",
+    #"Disponibilidad_BUY": "Disponibilidad BUY (USDT)",
+    #"Precio_Robusto_BUY": "Precio Robusto BUY (BOB)"
+#})
+
+# Renombrar la primera columna explícitamente en caso de que mantenga el nombre del índice
+#df_export.columns.values[0] = "Timestamp / Snapshot"
+
+# 3. Guardar directamente en la carpeta raíz
+#df_export.to_excel("datos_evolutivo_buy.xlsx", index=False, sheet_name="Evolutivo_BUY")
+
+# ====================================================
+# ANÁLISIS DE LIDERAZGO DE PRECIOS (TOP 10 VENDEDORES)
+# ====================================================
+
+# Asegurar que los datos contengan la columna de tiempo (incluso si está en el índice)
+df_datos = df_binance.reset_index()
+
+# Identificar el nombre de la columna temporal (Snapshot o Timestamp)
+col_time = "Snapshot" if "Snapshot" in df_datos.columns else "Timestamp"
+
+# 1. Identificar Top 10 vendedores por volumen histórico acumulado
+top_10_vendedores = (
+    df_datos[df_datos["Tipo"] == "BUY"]
+    .groupby("Vendedor")["Disponible"]
+    .sum()
+    .nlargest(10)
+    .index.tolist()
+)
+
+# 2. Matriz de precios mínimos por snapshot para el Top 10
+df_top10_prices = (
+    df_datos[(df_datos["Tipo"] == "BUY") & (df_datos["Vendedor"].isin(top_10_vendedores))]
+    .groupby([col_time, "Vendedor"])["Precio"]
+    .min()
+    .unstack()
+)
+
+# Reorganizar el índice temporal alineado con df_corr
+df_top10_prices = df_top10_prices.reindex(df_corr.index).ffill()
+
+# Mínimo precio del snapshot (Líder absoluto de la frontera)
+df_corr["Precio_Min_Lider"] = df_datos[df_datos["Tipo"] == "BUY"].groupby(col_time)["Precio"].min()
+
+# Spread o Margen de Dispersión (Premio de Liquidez)
+df_corr["Spread_Lider_vs_Robusto"] = df_corr["Precio_Robusto_BUY"] - df_corr["Precio_Min_Lider"]
+
+# ====================================================
+# GRÁFICO MEJORADO: TOP 10 Y PRECIO ROBUSTO
+# ====================================================
+
+# Calcular margen extra en las fechas de inicio y fin (5% de padding a los lados)
+min_date = df_top10_prices.index.min()
+max_date = df_top10_prices.index.max()
+time_margin = (max_date - min_date) * 0.02  # 2% de padding visual
+
+fig_leaders = go.Figure()
+
+# 1. Trazar Líneas de los 10 Vendedores (Marcadores pequeños y líneas delgadas)
+for vendor in top_10_vendedores:
+    if vendor in df_top10_prices.columns:
+        fig_leaders.add_trace(go.Scatter(
+            x=df_top10_prices.index,
+            y=df_top10_prices[vendor],
+            mode="lines+markers",
+            name=f"Vendedor: {vendor}",
+            line=dict(width=1),
+            marker=dict(size=4),
+            opacity=0.45
+        ))
+
+# 2. Trazar el Precio Promedio Robusto Mercado (Línea gruesa y marcadores claros)
+fig_leaders.add_trace(go.Scatter(
+    x=df_corr.index,
+    y=df_corr["Precio_Robusto_BUY"],
+    mode="lines+markers",
+    name="Precio Robusto Mercado (BUY)",
+    line=dict(color="#2B6CB0", width=3),
+    marker=dict(size=5, color="#2B6CB0")
+))
+
+# 3. Formato del Layout con Margen en el Eje X
+fig_leaders.update_layout(
+    title="Evolución de Precios: Top 10 Anunciantes BUY vs. Precio Robusto de Mercado",
+    xaxis_title="Snapshot",
+    yaxis_title="Precio (BOB)",
+    hovermode="x unified",
+    xaxis=dict(
+        range=[min_date - time_margin, max_date + time_margin] # Otorga espacio al inicio y final
+    )
+)
+
+st.plotly_chart(fig_leaders, use_container_width=True)
+
+import statsmodels.api as sm
+from statsmodels.tsa.stattools import grangercausalitytests
+
+# ====================================================
+# MODELO DE STACKELBERG Y CAUSALIDAD DE GRANGER
+# ====================================================
+
+st.markdown("### 🏆 Identificación del Líder de Mercado (Modelo de Stackelberg)")
+
+# 1. Preparar la serie en diferencias para asegurar estacionariedad
+df_granger = df_top10_prices.copy()
+df_granger["Precio_Robusto"] = df_corr["Precio_Robusto_BUY"]
+df_granger_diff = df_granger.diff().dropna()
+
+max_lags = 4  # Probar hasta 4 snapshots de rezago
+leader_results = []
+
+# Evaluamos cada vendedor del Top 10
+for vendor in top_10_vendedores:
+    if vendor in df_granger_diff.columns:
+        # Filtrar datos sin nulos
+        data_test = df_granger_diff[["Precio_Robusto", vendor]].dropna()
+        
+        # Debe haber suficientes datos para la prueba
+        if len(data_test) > (max_lags * 5):
+            try:
+                gc_res = grangercausalitytests(data_test, maxlag=max_lags, verbose=False)
+                
+                # Buscar el lag con el mejor p-valor para este vendedor
+                best_lag = None
+                best_p_value = 1.0
+                
+                for lag in range(1, max_lags + 1):
+                    p_val = gc_res[lag][0]["ssr_ftest"][1]
+                    if p_val < best_p_value:
+                        best_p_value = p_val
+                        best_lag = lag
+                
+                leader_results.append({
+                    "Vendedor": vendor,
+                    "Mejor_Lag": best_lag,
+                    "P_Valor": best_p_value,
+                    "Es_Lider": best_p_value < 0.05
+                })
+            except Exception:
+                continue
+
+# Convertir a DataFrame y ordenar por significancia estadística
+df_leaders_rank = pd.DataFrame(leader_results).sort_values(by="P_Valor")
+
+if not df_leaders_rank.empty and df_leaders_rank.iloc[0]["Es_Lider"]:
+    lider_detectado = df_leaders_rank.iloc[0]["Vendedor"]
+    lag_optimo = int(df_leaders_rank.iloc[0]["Mejor_Lag"])
+    p_val_opt = df_leaders_rank.iloc[0]["P_Valor"]
+    
+    # 2. Estimación de la Función de Reacción de Stackelberg con el Lag Óptimo
+    df_stack = pd.DataFrame({
+        "Y_Mercado": df_corr["Precio_Robusto_BUY"],
+        "X_Lider_Lag": df_top10_prices[lider_detectado].shift(lag_optimo)
+    }).dropna()
+    
+    X_reg = sm.add_constant(df_stack["X_Lider_Lag"])
+    y_reg = df_stack["Y_Mercado"]
+    model_stack = sm.OLS(y_reg, X_reg).fit()
+    
+    beta_lider = model_stack.params["X_Lider_Lag"]
+    r2_stack = model_stack.rsquared
+    
+    # Muestra de Resultados en Streamlit
+    st.success(f"**Líder de Precios Identificado:** `{lider_detectado}`")
+    
+    col_a, col_b, col_c = st.columns(3)
+    with col_a:
+        st.metric("Tiempo de Reacción", f"{lag_optimo} Snapshot(s)", 
+                  help="Número de snapshots que le toma al mercado seguir al líder.")
+    with col_b:
+        st.metric("Sensibilidad / Coeficiente (β)", f"{beta_lider:.3f}", 
+                  help="Por cada 1 BOB que ajusta el líder, el mercado reacciona cambiando β BOB.")
+    with col_c:
+        st.metric("Capacidad Predictiva (R²)", f"{r2_stack * 100:.1f}%", 
+                  help="Porcentaje de variación del mercado explicada por la conducta del líder.")
+
+else:
+    st.info("No se encontró un único líder estadísticamente significativo (p < 0.05). El mercado responde a una dinámica de Bertrand atomizada/competitiva sin liderazgo persistente.")
+
 # ========================================================================================================
 # HIPERMAXI
 # ========================================================================================================

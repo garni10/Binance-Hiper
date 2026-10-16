@@ -53,7 +53,7 @@ def cargar_binance():
 
 @st.cache_data(ttl=300)
 def cargar_hipermaxi():
-    df = pd.read_csv("data/hipermaxi_detallado_suc.csv")
+    df = pd.read_csv("data/hipermaxi_detallado_suc.csv.gz")
     df["Fecha"] = pd.to_datetime(df["Fecha"])
     return df
 

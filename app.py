@@ -871,6 +871,74 @@ if not df_leaders_rank.empty and df_leaders_rank.iloc[0]["Es_Lider"]:
 else:
     st.info("No se encontró un único líder estadísticamente significativo (p < 0.05). El mercado responde a una dinámica de Bertrand atomizada/competitiva sin liderazgo persistente.")
 
+import statsmodels.api as sm
+from statsmodels.tsa.stattools import grangercausalitytests
+
+# ====================================================
+# MODELO DE BERTRAND Y ANÁLISIS DE FRONTERA
+# ====================================================
+
+st.markdown("### 🛒 Dinámica de Mercado: Competencia en Precios (Modelo de Bertrand)")
+
+# 1. Procesamiento del Ranking de Granger para todos los vendedores
+df_granger = df_top10_prices.copy().ffill().bfill()
+df_granger["Precio_Robusto"] = df_corr["Precio_Robusto_BUY"].ffill().bfill()
+df_granger_diff = df_granger.diff().dropna()
+
+max_lags = 4
+leader_results = []
+
+for vendor in top_10_vendedores:
+    if vendor in df_granger_diff.columns:
+        data_test = df_granger_diff[["Precio_Robusto", vendor]].dropna()
+        if len(data_test) > (max_lags * 5) and data_test[vendor].var() > 1e-6:
+            try:
+                gc_res = grangercausalitytests(data_test[["Precio_Robusto", vendor]], maxlag=max_lags, verbose=False)
+                best_lag, best_p_value = None, 1.0
+                for lag in range(1, max_lags + 1):
+                    p_val = gc_res[lag][0]["ssr_ftest"][1]
+                    if p_val < best_p_value:
+                        best_p_value = p_val
+                        best_lag = lag
+                if best_lag is not None:
+                    leader_results.append({
+                        "Vendedor": vendor,
+                        "Mejor_Lag": best_lag,
+                        "P_Valor": float(best_p_value),
+                        "Es_Significativo": float(best_p_value) < 0.05
+                    })
+            except Exception:
+                continue
+
+if leader_results:
+    df_ranking = pd.DataFrame(leader_results).sort_values(by="P_Valor")
+    
+    # Mostrar la tabla de causalidad completa para análisis visual
+    st.markdown("#### 📋 Ranking de Causalidad Cruzada (Top Vendedores)")
+    st.dataframe(df_ranking, use_container_width=True, hide_index=True)
+    
+    # Contar cuántos vendedores significativos existen
+    vendedores_activos = df_ranking[df_ranking["Es_Significativo"]]["Vendedor"].tolist()
+    n_significativos = len(vendedores_activos)
+    
+    if n_significativos > 1:
+        st.info(
+            f"""
+            💡 **Diagnóstico de Régimen (Modelo de Bertrand / Liderazgo Compartido):**
+            Se detectaron **{n_significativos} vendedores** con poder de influencia estadística significativa ($p < 0.05$). 
+            Esto confirma: **ya no existe un líder único de Stackelberg**, sino un oligopolio competitivo estilo **Bertrand con capacidad limitada**, 
+            donde la batuta del precio rota dinámicamente entre varios actores principales (`{', '.join(vendedores_activos[:3])}`).
+            """
+        )
+    elif n_significativos == 1:
+        lider_unico = vendedores_activos[0]
+        st.success(f"Se mantiene un liderazgo concentrado en: **{lider_unico}**.")
+    else:
+        st.warning("El mercado opera bajo una estructura difusa y altamente atomizada sin dominancia de precios clara.")
+else:
+    st.warning("No hay suficientes datos para procesar el ranking de causalidad.")
+
+
 # ========================================================================================================
 # HIPERMAXI
 # ========================================================================================================
